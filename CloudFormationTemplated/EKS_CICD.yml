@@ -1,0 +1,288 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  EksClusterName:
+    Type: String
+    Default: myEksTest
+    Description: Name of the EKS Cluster
+  EksDeploymentName:
+    Type: String
+    Default: web-server-depl
+    Description: Name of the EKS Deployment which will be updated by the CICD
+Resources:
+  CodeBuildLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub 'CodeBuildLambdaRole-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+        Version: 2012-10-17
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess'
+      Policies:
+        - PolicyName: SSMParametersReadOnlyAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ssm:GetParameter'
+                  - 'ssm:GetParameterHistory'
+                  - 'ssm:GetParameters'
+                  - 'ssm:GetParametersByPath'
+                Resource: '*'
+  CodeBuildRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Path: /service-role/
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+          Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess'
+  EksCodeBuildKubectlRole:
+    Type: 'AWS::IAM::Role'
+    DependsOn:
+      - CodeBuildRole
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+            AWS: !GetAtt 
+              - CodeBuildRole
+              - Arn
+          Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonEKSClusterPolicy'
+  CodeBuildRolePolicy:
+    Type: 'AWS::IAM::Policy'
+    DependsOn:
+      - CodeBuildRole
+      - EksCodeBuildKubectlRole
+      - InsInfoWebCodeBuildApp
+      - MyCodeRepo
+    Properties:
+      Roles:
+        - !Ref CodeBuildRole
+      PolicyName: CodeBuildRolePolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'eks:*'
+            Resource: '*'
+          - Effect: Allow
+            Action: 'sts:AssumeRole'
+            Resource: !GetAtt 
+              - EksCodeBuildKubectlRole
+              - Arn
+          - Effect: Allow
+            Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Resource:
+              - !Join 
+                - ''
+                - - 'arn:aws:logs:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - ':log-group:/aws/codebuild/'
+                  - !Ref InsInfoWebCodeBuildApp
+              - !Join 
+                - ''
+                - - 'arn:aws:logs:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - ':log-group:/aws/codebuild/'
+                  - !Ref InsInfoWebCodeBuildApp
+                  - ':*'
+          - Effect: Allow
+            Resource:
+              - !Join 
+                - ''
+                - - 'arn:aws:s3:::codepipeline-'
+                  - !Ref 'AWS::Region'
+                  - '-*'
+            Action:
+              - 's3:PutObject'
+              - 's3:GetObject'
+              - 's3:GetObject'
+              - 's3:GetBucketAcl'
+              - 's3:GetBucketLocation'
+          - Effect: Allow
+            Resource:
+              - !Join 
+                - ''
+                - - 'arn:aws:codecommit:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - ':'
+                  - !GetAtt 
+                    - MyCodeRepo
+                    - Name
+            Action:
+              - 'codecommit:GitPull'
+          - Effect: Allow
+            Resource:
+              - !Join 
+                - ''
+                - - 'arn:aws:codebuild:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - ':report-group/'
+                  - !Ref InsInfoWebCodeBuildApp
+                  - '-*'
+            Action:
+              - 'codebuild:CreateReportGroup'
+              - 'codebuild:CreateReport'
+              - 'codebuild:UpdateReport'
+              - 'codebuild:BatchPutTestCases'
+              - 'codebuild:BatchPutTestCases'
+  DockerImageRepo:
+    Type: 'AWS::ECR::Repository'
+    Properties:
+      RepositoryName: ins-info-web-service-image
+  InsInfoWebCodeBuildApp:
+    Type: 'AWS::CodeBuild::Project'
+    DependsOn:
+      - CodeBuildRole
+      - MyCodeRepo
+    Properties:
+      Name: InsInfoWebCodeBuildProject
+      Description: >-
+        Code Build Project to create ECR Image and trigger EKS Service
+        Deployment
+      ServiceRole: !GetAtt 
+        - CodeBuildRole
+        - Arn
+      Artifacts:
+        Type: no_artifacts
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: 'aws/codebuild/standard:4.0'
+        PrivilegedMode: true
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: IMAGE_REPO_NAME
+            Type: PLAINTEXT
+            Value: !Ref DockerImageRepo
+          - Name: IMAGE_TAG
+            Type: PLAINTEXT
+            Value: latest
+          - Name: EKS_CODEBUILD_KUBECTL_ROLE_ARN
+            Type: PLAINTEXT
+            Value: !GetAtt 
+              - EksCodeBuildKubectlRole
+              - Arn
+          - Name: EKS_CLUSTER_NAME
+            Type: PLAINTEXT
+            Value: !Ref EksClusterName
+          - Name: EKS_DEPLOYMENT_NAME
+            Type: PLAINTEXT
+            Value: !Ref EksDeploymentName
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+      Source:
+        Type: CODECOMMIT
+        GitCloneDepth: 1
+        Location: !Join 
+          - ''
+          - - 'https://git-codecommit.'
+            - !Ref 'AWS::Region'
+            - .amazonaws.com/v1/repos/
+            - !GetAtt 
+              - MyCodeRepo
+              - Name
+      SourceVersion: refs/heads/master
+  CodeBuildTriggerFunction:
+    Type: 'AWS::Lambda::Function'
+    DependsOn:
+      - CodeBuildLambdaRole
+    Properties:
+      Runtime: python3.7
+      Handler: index.lambda_handler
+      Description: >-
+        Lambda function to be triggered by CodeCommit and to invoke the
+        CodeDeploy to deploy updates into an EKS Deployment
+      Code:
+        ZipFile: |
+          import boto3
+
+          def lambda_handler(event, context):
+              print('Starting a new build ...')
+              cb = boto3.client('codebuild')
+              ssmc = boto3.client('ssm')
+              response = ssmc.get_parameter(Name='CODE_BUILD_PPROJ_NAME')
+              build = {
+                  # 'projectName': event['Records'][0]['customData'],
+                  'projectName': response['Parameter']['Value'],
+                  'sourceVersion': event['Records'][0]['codecommit']['references'][0]['commit']
+              }
+              print('Starting build for project {0} from commit ID {1}'.format(build['projectName'], build['sourceVersion']))
+              cb.start_build(**build)
+              print('Successfully launched a new CodeBuild project build!')
+      Role: !GetAtt 
+        - CodeBuildLambdaRole
+        - Arn
+  MyCodeRepo:
+    Type: 'AWS::CodeCommit::Repository'
+    DependsOn:
+      - CodeBuildTriggerFunction
+    Properties:
+      RepositoryName: InsInfoWebCodeRepo
+      RepositoryDescription: Code Repo for InsInfo Website page
+      Triggers:
+        - Name: LambdaTrigger
+          DestinationArn: !GetAtt 
+            - CodeBuildTriggerFunction
+            - Arn
+          Branches:
+            - master
+          Events:
+            - updateReference
+  CodeBuildAppName:
+    Type: 'AWS::SSM::Parameter'
+    DependsOn:
+      - InsInfoWebCodeBuildApp
+    Properties:
+      Description: >-
+        AWS Code Build Project Name which will be referanced by the Lambda
+        function at run time
+      Name: CODE_BUILD_PPROJ_NAME
+      Type: String
+      Value: !Ref InsInfoWebCodeBuildApp
+  CodeCommitPermissionForLambdaFunction:
+    Type: 'AWS::Lambda::Permission'
+    DependsOn:
+      - CodeBuildTriggerFunction
+      - MyCodeRepo
+    Properties:
+      FunctionName: !Ref CodeBuildTriggerFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: codecommit.amazonaws.com
+      SourceAccount: !Ref 'AWS::AccountId'
+      SourceArn: !GetAtt 
+        - MyCodeRepo
+        - Arn
+
