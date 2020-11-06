@@ -256,9 +256,7 @@ Resources:
         - Name: LambdaTrigger
           DestinationArn: !GetAtt 
             - CodeBuildTriggerFunction
-            - Arn
-          Branches:
-            - master
+            - Arn  
           Events:
             - updateReference
   CodeBuildAppName:
