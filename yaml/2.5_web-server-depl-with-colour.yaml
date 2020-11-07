@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+# Create ConfigMap first using command kubectl create configmap pagecolour --from-literal=COLOUR=red
+metadata:
+  labels:
+    run: web-server-colour-depl
+  name: web-server-colour-depl
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      run: web-server-colour-depl
+  template:
+    metadata:
+      labels:
+        run: web-server-colour-depl
+        deploy: web-server
+    spec:
+      containers:
+      - env:
+        - name: EC_ENDPOINT
+          value: redis
+        - name: EC_PORT
+          value: '6379'
+        - name: DB_ENDPOINT
+          value: mysql
+        - name: DB_PORT
+          value: '3306'
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              key: MYSQL_DATABASE
+              name: db-cred
+        - name: DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              key: MYSQL_USER
+              name: db-cred
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: MYSQL_PASSWORD
+              name: db-cred
+        - name: COLOUR
+          valueFrom:
+            configMapKeyRef:
+              name: pagecolour
+              key: COLOUR
+        image: 342241566140.dkr.ecr.us-east-1.amazonaws.com/php_apache/web_image:with_improved_php_scripts_colour_env_var_logging_and_404_v5
+        name: web-server-depl
+
