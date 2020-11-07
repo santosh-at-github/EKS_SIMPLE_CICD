@@ -101,4 +101,5 @@
     aws ecr batch-delete-image --repository-name $ECR_REPO --image-ids $Images --region $REGION
     aws cloudformation delete-stack --stack-name $CICD_CFN_STACK --region $REGION
     eksctl delete cluster $EKS_CLUSTER_NAME
+    aws ec2 delete-key-pair --key-name $EC2_KEY_PAIR_NAME --region $REGION
     ```
